@@ -1,0 +1,30 @@
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+    font-family: 'Source Sans Pro', 'Trebuchet MS', 'Lucida Grande', 'Bitstream Vera Sans', 'Helvetica Neue', sans-serif;
+    margin: 0;
+    color: #293c4b;
+
+    height: 100vh;
+}
+
+#root,
+canvas-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+
+canvas {
+  image-rendering: -moz-crisp-edges;
+  image-rendering: -webkit-crisp-edges;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  border: 2px solid #f0c;
+}
