@@ -7,19 +7,16 @@ import Game.Resources as Resources exposing (Resources)
 import Game.TwoD as Game
 import Game.TwoD.Camera as Camera exposing (Camera)
 import Game.TwoD.Render as Render exposing (Renderable)
+import Helpers
 import Html exposing (Html, button, div, h1, text)
 import Html.Attributes exposing (class)
 import Html.Events exposing (onClick)
 import Keyboard.Extra
 import PageVisibility exposing (Visibility)
 import Ports
-import WebGL.Texture as Texture exposing (Texture)
+import Textures exposing (textures)
 
 
---import Math.Vector2 exposing (Vec2, vec2)
---import Math.Vector3 exposing (Vec3, vec3)
---import Task
---import Window
 ---- MODEL ----
 
 
@@ -124,40 +121,9 @@ init =
       , paused = False
       }
     , Cmd.batch
-        [ loadTextures
-            [ textures.dude
-            , textures.worker
-            , textures.background
-            , textures.hat
-            ]
+        [ Textures.load Resources ResourcesErr
         ]
     )
-
-
-loadTextures : List String -> Cmd Msg
-loadTextures paths =
-    List.map texture paths
-        |> Resources.loadTexturesWithConfig
-            { success = Resources
-            , failed = ResourcesErr
-            }
-
-
-textures =
-    { dude = "images/dude.png"
-    , background = "images/background.png"
-    , worker = "images/worker.png"
-    , hat = "images/hat.png"
-    }
-
-
-texture : String -> ( Texture.Options, String )
-texture url =
-    let
-        default =
-            Texture.defaultOptions
-    in
-    ( { default | magnify = Texture.nearest }, url )
 
 
 
@@ -171,16 +137,6 @@ type Msg
     | KeyMsg Keyboard.Extra.Msg
     | PageVisible Visibility
     | TogglePause
-
-
-workerKeepsWalking : Worker -> Bool
-workerKeepsWalking worker =
-    worker.x < 15
-
-
-isHappyWorker : Worker -> Bool
-isHappyWorker worker =
-    worker.hasHat
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -355,6 +311,16 @@ moveWorker delta worker =
     }
 
 
+workerKeepsWalking : Worker -> Bool
+workerKeepsWalking worker =
+    worker.x < 15
+
+
+isHappyWorker : Worker -> Bool
+isHappyWorker worker =
+    worker.hasHat
+
+
 updateHats : Float -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
 updateHats delta ( model, cmd ) =
     case
@@ -363,7 +329,7 @@ updateHats delta ( model, cmd ) =
     of
         [ ( hatIndex, row, workerIndex ) ] ->
             ( { model
-                | hats = dropFromList hatIndex model.hats
+                | hats = Helpers.dropFromList hatIndex model.hats
                 , rows =
                     Array.Extra.update row
                         (\workers ->
@@ -391,19 +357,6 @@ moveHat delta hat =
     { hat | x = hat.x - delta * constants.hatSpeed }
 
 
-dropFromList : Int -> List a -> List a
-dropFromList index list =
-    list
-        |> List.indexedMap
-            (\index_ hat ->
-                if index == index_ then
-                    Nothing
-                else
-                    Just hat
-            )
-        |> List.filterMap identity
-
-
 hatHits : Array (List Worker) -> Int -> Hat -> Maybe ( Int, Int, Int )
 hatHits rows hatIndex hat =
     case Array.get hat.row rows of
@@ -411,55 +364,13 @@ hatHits rows hatIndex hat =
             Nothing
 
         Just workers ->
-            case findFirst (\worker -> worker.x >= hat.x) workers of
+            -- updateFirst (\worker -> worker.x <= hat.x) (\worker.hasHat = True) workers
+            case Helpers.findFirst (\worker -> worker.x >= hat.x) workers of
                 Nothing ->
                     Nothing
 
                 Just workerIndex ->
                     Just ( hatIndex, hat.row, workerIndex )
-
-
-
-{- }
-   updateFirst (\worker -> worker.x <= hat.x) (\worker.hasHat = True) workers
--}
-
-
-updateFirst : (a -> Bool) -> (a -> a) -> List a -> List a
-updateFirst check transform list =
-    let
-        helper before list =
-            case list of
-                [] ->
-                    List.reverse before
-
-                head :: tail ->
-                    if check head then
-                        List.append
-                            (List.reverse (transform head :: before))
-                            tail
-                    else
-                        helper (head :: before) tail
-    in
-    helper [] list
-
-
-findFirst : (a -> Bool) -> List a -> Maybe Int
-findFirst check list =
-    findFirstHelper check 0 list
-
-
-findFirstHelper : (a -> Bool) -> Int -> List a -> Maybe Int
-findFirstHelper check index list =
-    case list of
-        [] ->
-            Nothing
-
-        head :: tail ->
-            if check head then
-                Just index
-            else
-                findFirstHelper check (index + 1) tail
 
 
 
@@ -553,7 +464,7 @@ renderDude resources { x, y } =
         , size = ( -6, 8 )
         , texture = Resources.getTexture textures.dude resources
 
-        -- bottomLeft and topRight allow to select a subsection of an image
+        -- bottomLeft and topRight allow to select a subsection of an image ( x, y )
         , bottomLeft = ( 0, 0 )
         , topRight = ( 0.83984375, 1 )
         , duration = 1.2
@@ -574,7 +485,7 @@ hat resources { x, row } =
         , size = ( 3, 4 )
         , texture = Resources.getTexture textures.hat resources
 
-        -- bottomLeft and topRight allow to select a subsection of an image
+        -- bottomLeft and topRight allow to select a subsection of an image ( x, y )
         , bottomLeft = ( 0, 0 )
         , topRight = ( 1, 1 )
         , duration = 1.2
