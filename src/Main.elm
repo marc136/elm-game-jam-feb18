@@ -7,7 +7,9 @@ import Game.Resources as Resources exposing (Resources)
 import Game.TwoD as Game
 import Game.TwoD.Camera as Camera exposing (Camera)
 import Game.TwoD.Render as Render exposing (Renderable)
-import Html exposing (Html, div, h1, img, text)
+import Html exposing (Html, button, div, h1, text)
+import Html.Attributes exposing (class)
+import Html.Events exposing (onClick)
 import Keyboard.Extra
 import PageVisibility exposing (Visibility)
 import Ports
@@ -34,6 +36,7 @@ type alias Model =
     , hats : List Hat
     , timeUntilNextThrow : Float
     , visible : Bool
+    , paused : Bool
     }
 
 
@@ -118,6 +121,7 @@ init =
       , camera = Camera.fixedArea (40 * 30) ( 0, 0 )
       , resources = Resources.init
       , visible = True
+      , paused = False
       }
     , Cmd.batch
         [ loadTextures
@@ -166,6 +170,7 @@ type Msg
     | ResourcesErr String
     | KeyMsg Keyboard.Extra.Msg
     | PageVisible Visibility
+    | TogglePause
 
 
 workerKeepsWalking : Worker -> Bool
@@ -181,6 +186,9 @@ isHappyWorker worker =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        TogglePause ->
+            togglePause model
+
         Tick delta ->
             gameTick (Keyboard.Extra.arrows model.pressedKeys) delta model
 
@@ -197,16 +205,24 @@ update msg model =
             ( model, Cmd.none )
 
         KeyMsg keyMsg ->
-            ( { model
-                | pressedKeys = Keyboard.Extra.update keyMsg model.pressedKeys
-              }
-            , Cmd.none
-            )
+            let
+                keys =
+                    Keyboard.Extra.update keyMsg model.pressedKeys
+            in
+            if List.member Keyboard.Extra.Escape keys then
+                togglePause model
+            else
+                ( { model | pressedKeys = keys }, Cmd.none )
 
         PageVisible visibility ->
             ( { model | visible = visibility == PageVisibility.Visible }
             , Cmd.none
             )
+
+
+togglePause : Model -> ( Model, Cmd msg )
+togglePause model =
+    ( { model | paused = not model.paused }, Cmd.none )
 
 
 gameTick : Keyboard.Extra.Arrows -> Float -> Model -> ( Model, Cmd Msg )
@@ -278,7 +294,7 @@ moveDudeWithKeys { y } ({ animate, row } as dude) =
 
 maybeThrow : Keyboard.Extra.Arrows -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
 maybeThrow { x } ( model, cmd ) =
-    if x == -1 && model.timeUntilNextThrow <= 0 then
+    if model.dude.animate == Idle && x == -1 && model.timeUntilNextThrow <= 0 then
         ( { model
             | timeUntilNextThrow = constants.throwSpeed
             , hats = Hat model.dude.row model.dude.x :: model.hats
@@ -452,9 +468,22 @@ findFirstHelper check index list =
 
 view : Model -> Html Msg
 view model =
-    Game.renderWithOptions []
-        (renderConfig model)
-        (toRenderables model)
+    div []
+        [ Game.render
+            (renderConfig model)
+            (toRenderables model)
+        , if model.paused then
+            div [ class "overlay" ]
+                [ div [ class "modal" ]
+                    [ h1 [] [ text "Game is paused" ]
+                    , button
+                        [ onClick TogglePause ]
+                        [ text "continue" ]
+                    ]
+                ]
+          else
+            text ""
+        ]
 
 
 renderConfig : { d | camera : Camera, screen : ( Int, Int ), time : Float } -> Game.RenderConfig
@@ -565,16 +594,17 @@ subscriptions : Model -> Sub Msg
 subscriptions model =
     Sub.batch <|
         List.append
-            (if model.visible then
-                [ Sub.map KeyMsg Keyboard.Extra.subscriptions
-                , AnimationFrame.diffs (Tick << (\d -> d / 1000))
+            (if model.visible && not model.paused then
+                [ AnimationFrame.diffs (Tick << (\d -> d / 1000))
 
                 --, Window.resizes ScreenSize
                 ]
              else
                 []
             )
-            [ PageVisibility.visibilityChanges PageVisible ]
+            [ Sub.map KeyMsg Keyboard.Extra.subscriptions
+            , PageVisibility.visibilityChanges PageVisible
+            ]
 
 
 
