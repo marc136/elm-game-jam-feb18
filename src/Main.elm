@@ -384,40 +384,25 @@ isHappyWorker worker =
 
 updateHats : Float -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
 updateHats delta ( model, cmd ) =
-    case
-        List.indexedMap (hatHits model.rows) model.hats
-            |> List.filterMap identity
-    of
-        [ ( hatIndex, row, workerIndex ) ] ->
-            ( { model
-                | hats = Helpers.dropFromList hatIndex model.hats
-                , rows =
-                    Array.Extra.update row
-                        (\workers ->
-                            List.indexedMap
-                                (\index worker ->
-                                    if index == workerIndex then
-                                        { worker
-                                            | hasHat = True
-                                            , moveSpeed = worker.moveSpeed * 3
-                                        }
-                                    else
-                                        worker
-                                )
-                                workers
-                        )
-                        model.rows
-                , points = model.points + 1
-              }
-            , Cmd.batch [ cmd, Ports.sound "get-hat" ]
-            )
+    let
+        hats =
+            model.hats
+                -- move hats
+                |> List.map (moveHat delta)
+    in
+    hats
+        -- check which hats hit workers
+        |> List.indexedMap (hatHits model.rows)
+        |> List.filterMap identity
+        -- update workers and list of hats
+        |> List.foldl addHatToWorker ( { model | hats = hats }, [ cmd ] )
+        -- batch all commands
+        |> Tuple.mapSecond Cmd.batch
 
-        _ ->
-            ( { model
-                | hats = List.map (moveHat delta) model.hats
-              }
-            , cmd
-            )
+
+moveHat : Float -> Hat -> Hat
+moveHat delta hat =
+    { hat | x = hat.x - delta * constants.hatSpeed }
 
 
 hatHits : Array (List Worker) -> Int -> Hat -> Maybe ( Int, Int, Int )
@@ -436,9 +421,36 @@ hatHits rows hatIndex hat =
                     Just ( hatIndex, hat.row, workerIndex )
 
 
-moveHat : Float -> Hat -> Hat
-moveHat delta hat =
-    { hat | x = hat.x - delta * constants.hatSpeed }
+addHatToWorker : ( Int, Int, Int ) -> ( Model, List (Cmd Msg) ) -> ( Model, List (Cmd Msg) )
+addHatToWorker ( hatIndex, row, workerIndex ) ( model, cmds ) =
+    ( { model
+        | hats = Helpers.dropFromList hatIndex model.hats
+        , rows =
+            Array.Extra.update row
+                (\workers ->
+                    List.indexedMap
+                        (\index worker ->
+                            if index == workerIndex then
+                                if worker.hasHat then
+                                    { worker
+                                        | hasHat = False
+                                        , moveSpeed = worker.moveSpeed / 3
+                                    }
+                                else
+                                    { worker
+                                        | hasHat = True
+                                        , moveSpeed = worker.moveSpeed * 3
+                                    }
+                            else
+                                worker
+                        )
+                        workers
+                )
+                model.rows
+        , points = model.points + 1
+      }
+    , Ports.sound "get-hat" :: cmds
+    )
 
 
 spawnNewWorker : ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
