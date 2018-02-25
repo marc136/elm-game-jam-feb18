@@ -22,7 +22,7 @@ import Textures exposing (textures)
 
 type alias Model =
     { stage : Stage
-    , points : Int
+    , costs : Int
     , dude : Dude
     , resources : Resources
     , pressedKeys : List Keyboard.Extra.Key
@@ -35,7 +35,6 @@ type alias Model =
     , angryWorkers : List Worker
     , happyWorkers : List Worker
     , hats : List Hat
-    , timeUntilNextThrow : Float
     , visible : Bool
     , paused : Bool
     }
@@ -53,16 +52,12 @@ type alias Hat =
     }
 
 
-type Animate
-    = Idle
-    | MoveUp Float
-    | MoveDown Float
-
-
 constants =
     { moveSpeed = 5
     , throwSpeed = 1.0
     , hatSpeed = 8
+    , dudeX = 18
+    , outsideViewport = 23
     }
 
 
@@ -71,15 +66,26 @@ type alias Dude =
     , y : Float
     , animate : Animate
     , row : Int
+    , hasHat : Bool
     }
+
+
+type Animate
+    = Idle
+    | MoveUp Float
+    | MoveDown Float
+    | Throw Float
+    | GetHat
+    | ReturnWithHat
 
 
 initDude : Dude
 initDude =
-    { x = 12
+    { x = constants.dudeX
     , y = rowToY 0
     , animate = Idle
     , row = 0
+    , hasHat = True
     }
 
 
@@ -99,7 +105,7 @@ type alias Worker =
 
 newWorker : Int -> Worker
 newWorker row =
-    { x = -23
+    { x = -1 * constants.outsideViewport
     , y = rowToY row
     , lifetime = 0
     , moveSpeed = 2
@@ -113,8 +119,8 @@ newWorker row =
 
 init : ( Model, Cmd Msg )
 init =
-    ( { stage = Level [ 0, 3, 1, 3 ] 3
-      , points = 0
+    ( { stage = Menu
+      , costs = 0
       , dude = initDude
       , rows = Array.empty
       , angryWorkers = []
@@ -122,7 +128,6 @@ init =
       , pressedKeys = []
       , hats = []
       , time = 0
-      , timeUntilNextThrow = 0
       , screen = ( 800, 600 )
 
       -- 4/3 screen size -> 40 x 30 game units
@@ -243,10 +248,7 @@ togglePause model =
 
 gameTick : Keyboard.Extra.Arrows -> Float -> Model -> ( Model, Cmd Msg )
 gameTick arrows delta model =
-    { model
-        | time = model.time + delta
-        , timeUntilNextThrow = model.timeUntilNextThrow - delta
-    }
+    { model | time = model.time + delta }
         |> updateDude arrows delta
         |> maybeThrow arrows
         |> updateRows delta
@@ -266,12 +268,12 @@ updateDude arrows delta model =
 
 
 moveDude : Float -> Dude -> Dude
-moveDude dt dude =
+moveDude delta dude =
     case dude.animate of
         MoveUp destination ->
             let
                 y =
-                    dude.y + (constants.moveSpeed * dt)
+                    dude.y + (constants.moveSpeed * delta)
             in
             if y >= destination then
                 { dude | y = destination, animate = Idle }
@@ -281,14 +283,43 @@ moveDude dt dude =
         MoveDown destination ->
             let
                 y =
-                    dude.y - (constants.moveSpeed * dt)
+                    dude.y - (constants.moveSpeed * delta)
             in
             if y <= destination then
                 { dude | y = destination, animate = Idle }
             else
                 { dude | y = y }
 
-        _ ->
+        Throw time ->
+            if time > 0 then
+                { dude | animate = Throw (time - delta) }
+            else
+                { dude | animate = GetHat }
+
+        GetHat ->
+            if dude.x < constants.outsideViewport then
+                { dude
+                    | x = dude.x + (constants.moveSpeed * delta)
+                    , animate = GetHat
+                }
+            else
+                -- emit ka-ching sound?
+                { dude
+                    | animate = ReturnWithHat
+                    , hasHat = True
+                }
+
+        ReturnWithHat ->
+            { dude
+                | x = dude.x - (constants.moveSpeed * delta)
+                , animate =
+                    if dude.x > constants.dudeX then
+                        ReturnWithHat
+                    else
+                        Idle
+            }
+
+        Idle ->
             dude
 
 
@@ -310,10 +341,10 @@ moveDudeWithKeys { y } ({ animate, row } as dude) =
 
 
 maybeThrow : Keyboard.Extra.Arrows -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
-maybeThrow { x } ( model, cmd ) =
-    if model.dude.animate == Idle && x == -1 && model.timeUntilNextThrow <= 0 then
+maybeThrow { x } ( { dude } as model, cmd ) =
+    if model.dude.animate == Idle && x == -1 then
         ( { model
-            | timeUntilNextThrow = constants.throwSpeed
+            | dude = { dude | animate = Throw 0.3, hasHat = False }
             , hats = Hat model.dude.row model.dude.x :: model.hats
           }
         , Cmd.batch [ Ports.sound "throw", cmd ]
@@ -363,18 +394,14 @@ updateRow delta workers =
 moveWorker : Float -> Worker -> Worker
 moveWorker delta worker =
     { worker
-        | x =
-            if worker.x < 15 then
-                worker.x + (worker.moveSpeed * delta)
-            else
-                worker.x
+        | x = worker.x + (worker.moveSpeed * delta)
         , lifetime = worker.lifetime + delta
     }
 
 
 workerKeepsWalking : Worker -> Bool
 workerKeepsWalking worker =
-    worker.x < 15
+    worker.x < constants.outsideViewport
 
 
 isHappyWorker : Worker -> Bool
@@ -413,7 +440,13 @@ hatHits rows hatIndex hat =
 
         Just workers ->
             -- updateFirst (\worker -> worker.x <= hat.x) (\worker.hasHat = True) workers
-            case Helpers.findFirst (\worker -> worker.x >= hat.x) workers of
+            case
+                Helpers.findFirst
+                    (\worker ->
+                        worker.x >= hat.x && worker.x < (constants.dudeX + 1)
+                    )
+                    workers
+            of
                 Nothing ->
                     Nothing
 
@@ -447,7 +480,7 @@ addHatToWorker ( hatIndex, row, workerIndex ) ( model, cmds ) =
                         workers
                 )
                 model.rows
-        , points = model.points + 1
+        , costs = model.costs + 10
       }
     , Ports.sound "get-hat" :: cmds
     )
@@ -530,16 +563,34 @@ background resources =
         }
 
 
+renderDude : Resources -> Dude -> Renderable
+renderDude resources dude =
+    workerSprite resources dude (direction dude)
+
+
+direction : Dude -> Float
+direction { animate } =
+    if animate == GetHat then
+        1
+    else
+        -1
+
+
 row : Resources -> List Worker -> List Renderable
 row resources workers =
     List.map (worker resources) workers
 
 
 worker : Resources -> Worker -> Renderable
-worker resources ({ x, y } as worker) =
+worker resources worker =
+    workerSprite resources worker 1
+
+
+workerSprite : Resources -> { a | x : Float, y : Float, hasHat : Bool } -> Float -> Renderable
+workerSprite resources { x, y, hasHat } direction =
     let
         row =
-            if worker.hasHat then
+            if hasHat then
                 0
             else
                 1
@@ -549,34 +600,13 @@ worker resources ({ x, y } as worker) =
     in
     Render.animatedSpriteWithOptions
         { position = ( x, y, 0 )
-        , size = ( 6, 8 )
+        , size = ( direction * 6, 8 )
         , texture = Resources.getTexture textures.worker resources
         , bottomLeft = ( 0, row * height )
         , topRight = ( 1, (row + 1) * height )
         , duration = 1.2
         , numberOfFrames = 4
         , rotation = 0
-        , pivot = ( 0.5, 1 )
-        }
-
-
-renderDude : Resources -> Dude -> Renderable
-renderDude resources { x, y } =
-    Render.animatedSpriteWithOptions
-        { position = ( x, y, 0 )
-
-        -- if a size value is < 0 the image is flipped
-        , size = ( -6, 8 )
-        , texture = Resources.getTexture textures.dude resources
-
-        -- bottomLeft and topRight allow to select a subsection of an image ( x, y )
-        , bottomLeft = ( 0, 0 )
-        , topRight = ( 0.83984375, 1 )
-        , duration = 1.2
-        , numberOfFrames = 4
-        , rotation = 0
-
-        -- pivot point for rotation
         , pivot = ( 0.5, 1 )
         }
 
