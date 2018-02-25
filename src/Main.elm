@@ -21,12 +21,16 @@ import Textures exposing (textures)
 
 
 type alias Model =
-    { dude : Dude
+    { stage : Stage
+    , points : Int
+    , dude : Dude
     , resources : Resources
     , pressedKeys : List Keyboard.Extra.Key
     , time : Float
     , screen : ( Int, Int )
     , camera : Camera
+
+    -- TODO decide if walking workers should be in one list instead
     , rows : Array (List Worker)
     , angryWorkers : List Worker
     , happyWorkers : List Worker
@@ -35,6 +39,12 @@ type alias Model =
     , visible : Bool
     , paused : Bool
     }
+
+
+type Stage
+    = Menu
+    | Level (List Int) Float
+    | GameOver
 
 
 type alias Hat =
@@ -92,7 +102,7 @@ newWorker row =
     { x = -23
     , y = rowToY row
     , lifetime = 0
-    , moveSpeed = 1.5
+    , moveSpeed = 2
     , hasHat = False
     }
 
@@ -103,8 +113,10 @@ newWorker row =
 
 init : ( Model, Cmd Msg )
 init =
-    ( { dude = initDude
-      , rows = Array.fromList [ [], [ newWorker 1 ] ]
+    ( { stage = Level [ 0, 3, 1, 3 ] 3
+      , points = 0
+      , dude = initDude
+      , rows = Array.empty
       , angryWorkers = []
       , happyWorkers = []
       , pressedKeys = []
@@ -120,10 +132,58 @@ init =
       , visible = True
       , paused = False
       }
+        |> loadLevel 0
     , Cmd.batch
         [ Textures.load Resources ResourcesErr
         ]
     )
+
+
+loadLevel : Int -> Model -> Model
+loadLevel index model =
+    let
+        model_ =
+            resetLevel model
+
+        length list =
+            List.maximum list |> Maybe.withDefault 0
+
+        level list spawnSpeed =
+            case list of
+                head :: tail ->
+                    { model_
+                        | stage = Level tail spawnSpeed
+                        , rows =
+                            Array.initialize
+                                (length list + 1)
+                                (\index ->
+                                    if index == head then
+                                        [ newWorker head ]
+                                    else
+                                        []
+                                )
+                    }
+
+                _ ->
+                    model
+    in
+    case index of
+        0 ->
+            level [ 0, 3, 1, 3 ] 3
+
+        _ ->
+            { model_ | stage = GameOver }
+
+
+resetLevel : Model -> Model
+resetLevel model =
+    { model
+        | stage = Menu
+        , dude = initDude
+        , rows = Array.empty
+        , angryWorkers = []
+        , happyWorkers = []
+    }
 
 
 
@@ -191,6 +251,7 @@ gameTick arrows delta model =
         |> maybeThrow arrows
         |> updateRows delta
         |> updateHats delta
+        |> spawnNewWorker
 
 
 updateDude : Keyboard.Extra.Arrows -> Float -> Model -> ( Model, Cmd Msg )
@@ -335,13 +396,20 @@ updateHats delta ( model, cmd ) =
                         (\workers ->
                             List.indexedMap
                                 (\index worker ->
-                                    { worker | hasHat = True }
+                                    if index == workerIndex then
+                                        { worker
+                                            | hasHat = True
+                                            , moveSpeed = worker.moveSpeed * 3
+                                        }
+                                    else
+                                        worker
                                 )
                                 workers
                         )
                         model.rows
+                , points = model.points + 1
               }
-            , cmd
+            , Cmd.batch [ cmd, Ports.sound "get-hat" ]
             )
 
         _ ->
@@ -350,11 +418,6 @@ updateHats delta ( model, cmd ) =
               }
             , cmd
             )
-
-
-moveHat : Float -> Hat -> Hat
-moveHat delta hat =
-    { hat | x = hat.x - delta * constants.hatSpeed }
 
 
 hatHits : Array (List Worker) -> Int -> Hat -> Maybe ( Int, Int, Int )
@@ -371,6 +434,36 @@ hatHits rows hatIndex hat =
 
                 Just workerIndex ->
                     Just ( hatIndex, hat.row, workerIndex )
+
+
+moveHat : Float -> Hat -> Hat
+moveHat delta hat =
+    { hat | x = hat.x - delta * constants.hatSpeed }
+
+
+spawnNewWorker : ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
+spawnNewWorker ( model, cmd ) =
+    case model.stage of
+        Level (row :: list) spawnSpeed ->
+            if model.time >= spawnSpeed then
+                ( { model
+                    | time = 0 -- time = model.time - spawnSpeed
+                    , stage = Level list spawnSpeed
+                    , rows =
+                        Array.Extra.update row (spawnWorker row) model.rows
+                  }
+                , Cmd.batch [ cmd, Ports.sound "spawn" ]
+                )
+            else
+                ( model, cmd )
+
+        _ ->
+            ( model, cmd )
+
+
+spawnWorker : Int -> List Worker -> List Worker
+spawnWorker row workers =
+    List.append workers [ newWorker row ]
 
 
 
