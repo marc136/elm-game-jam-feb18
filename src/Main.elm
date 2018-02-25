@@ -9,6 +9,7 @@ import Game.TwoD.Camera as Camera exposing (Camera)
 import Game.TwoD.Render as Render exposing (Renderable)
 import Html exposing (Html, div, h1, img, text)
 import Keyboard.Extra
+import PageVisibility exposing (Visibility)
 import Ports
 import WebGL.Texture as Texture exposing (Texture)
 
@@ -32,6 +33,7 @@ type alias Model =
     , happyWorkers : List Worker
     , hats : List Hat
     , timeUntilNextThrow : Float
+    , visible : Bool
     }
 
 
@@ -115,6 +117,7 @@ init =
       -- check with Camera.getViewSize model.screen model.camera
       , camera = Camera.fixedArea (40 * 30) ( 0, 0 )
       , resources = Resources.init
+      , visible = True
       }
     , Cmd.batch
         [ loadTextures
@@ -162,6 +165,7 @@ type Msg
     | Resources Resources.Msg
     | ResourcesErr String
     | KeyMsg Keyboard.Extra.Msg
+    | PageVisible Visibility
 
 
 workerKeepsWalking : Worker -> Bool
@@ -196,6 +200,11 @@ update msg model =
             ( { model
                 | pressedKeys = Keyboard.Extra.update keyMsg model.pressedKeys
               }
+            , Cmd.none
+            )
+
+        PageVisible visibility ->
+            ( { model | visible = visibility == PageVisibility.Visible }
             , Cmd.none
             )
 
@@ -399,6 +408,7 @@ hatHits rows hatIndex hat =
    updateFirst (\worker -> worker.x <= hat.x) (\worker.hasHat = True) workers
 -}
 
+
 updateFirst : (a -> Bool) -> (a -> a) -> List a -> List a
 updateFirst check transform list =
     let
@@ -481,21 +491,22 @@ row resources workers =
 
 
 worker : Resources -> Worker -> Renderable
-worker resources ({x, y } as worker) =
-    let 
+worker resources ({ x, y } as worker) =
+    let
         row =
             if worker.hasHat then
                 0
             else
                 1
-        
-        height = 0.1494140625
+
+        height =
+            0.1494140625
     in
     Render.animatedSpriteWithOptions
         { position = ( x, y, 0 )
         , size = ( 6, 8 )
         , texture = Resources.getTexture textures.worker resources
-        , bottomLeft = ( 0, row * height)
+        , bottomLeft = ( 0, row * height )
         , topRight = ( 1, (row + 1) * height )
         , duration = 1.2
         , numberOfFrames = 4
@@ -552,12 +563,18 @@ hat resources { x, row } =
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    Sub.batch
-        [ Sub.map KeyMsg Keyboard.Extra.subscriptions
+    Sub.batch <|
+        List.append
+            (if model.visible then
+                [ Sub.map KeyMsg Keyboard.Extra.subscriptions
+                , AnimationFrame.diffs (Tick << (\d -> d / 1000))
 
-        --, Window.resizes ScreenSize
-        , AnimationFrame.diffs (Tick << (\d -> d / 1000))
-        ]
+                --, Window.resizes ScreenSize
+                ]
+             else
+                []
+            )
+            [ PageVisibility.visibilityChanges PageVisible ]
 
 
 
