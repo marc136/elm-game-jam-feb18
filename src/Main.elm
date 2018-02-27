@@ -8,48 +8,13 @@ import Game.TwoD as Game
 import Game.TwoD.Camera as Camera exposing (Camera)
 import Game.TwoD.Render as Render exposing (Renderable)
 import Helpers
-import Html exposing (Html, button, div, h1, text)
+import Html exposing (Html, button, div, h1, h2, p, text)
 import Html.Attributes exposing (class)
 import Html.Events exposing (onClick)
 import Keyboard.Extra
 import PageVisibility exposing (Visibility)
-import Ports
+import Sound
 import Textures exposing (textures)
-
-
----- MODEL ----
-
-
-type alias Model =
-    { stage : Stage
-    , costs : Int
-    , dude : Dude
-    , resources : Resources
-    , pressedKeys : List Keyboard.Extra.Key
-    , time : Float
-    , screen : ( Int, Int )
-    , camera : Camera
-
-    -- TODO decide if walking workers should be in one list instead
-    , rows : Array (List Worker)
-    , angryWorkers : List Worker
-    , happyWorkers : List Worker
-    , hats : List Hat
-    , visible : Bool
-    , paused : Bool
-    }
-
-
-type Stage
-    = Menu
-    | Level (List Int) Float
-    | GameOver
-
-
-type alias Hat =
-    { row : Int
-    , x : Float
-    }
 
 
 constants =
@@ -59,6 +24,47 @@ constants =
     , dudeX = 18
     , outsideViewport = 23
     }
+
+
+
+---- MODEL ----
+
+
+type alias Model =
+    { stage : Stage
+
+    -- level specific
+    , level : Int
+    , dude : Dude
+    , queue : List Int
+
+    {--TODO decide if walking workers should be in one list instead-}
+    , rows : Workers
+    , hats : List Hat
+    , spawnSpeed : Float
+    , workerSpeed : Float
+
+    -- game stats
+    , stats : LevelStats
+    , costs : Int
+
+    -- general stuff
+    , pressedKeys : List Keyboard.Extra.Key
+    , time : Float
+    , nextSpawn : Float
+    , resources : Resources
+    , screen : ( Int, Int )
+    , camera : Camera
+    , visible : Bool
+    }
+
+
+type Stage
+    = Menu
+    | BeforeLevel
+    | PlayLevel
+    | PauseLevel
+    | GameOver
 
 
 type alias Dude =
@@ -79,6 +85,63 @@ type Animate
     | ReturnWithHat
 
 
+type alias Workers =
+    Array (List Worker)
+
+
+type alias Worker =
+    { x : Float
+    , y : Float
+    , lifetime : Float
+    , moveSpeed : Float
+    , hasHat : Bool
+    }
+
+
+type alias Hat =
+    { row : Int
+    , x : Float
+    }
+
+
+type alias LevelStats =
+    { workers : Int
+    , withoutHats : Int
+    }
+
+
+
+---- INIT ----
+
+
+init : ( Model, Cmd Msg )
+init =
+    ( { stage = Menu
+      , level = 0
+      , costs = 0
+      , queue = []
+      , spawnSpeed = 1.0
+      , workerSpeed = 3.0
+      , dude = initDude
+      , rows = Array.empty
+      , pressedKeys = []
+      , hats = []
+      , time = 0
+      , nextSpawn = 0
+      , screen = ( 800, 600 )
+
+      -- 4/3 screen size -> 40 x 30 game units
+      -- check with Camera.getViewSize model.screen model.camera
+      , camera = Camera.fixedArea (40 * 30) ( 0, 0 )
+      , resources = Resources.init
+      , visible = True
+      , stats = { workers = 0, withoutHats = 0 }
+      }
+        |> loadLevel 0
+    , Cmd.batch [ Textures.load Resources ResourcesErr ]
+    )
+
+
 initDude : Dude
 initDude =
     { x = constants.dudeX
@@ -94,87 +157,28 @@ rowToY row =
     13 - (toFloat row * 5)
 
 
-type alias Worker =
-    { x : Float
-    , y : Float
-    , lifetime : Float
-    , moveSpeed : Float
-    , hasHat : Bool
-    }
-
-
-newWorker : Int -> Worker
-newWorker row =
-    { x = -1 * constants.outsideViewport
-    , y = rowToY row
-    , lifetime = 0
-    , moveSpeed = 2
-    , hasHat = False
-    }
-
-
-
----- INIT ----
-
-
-init : ( Model, Cmd Msg )
-init =
-    ( { stage = Menu
-      , costs = 0
-      , dude = initDude
-      , rows = Array.empty
-      , angryWorkers = []
-      , happyWorkers = []
-      , pressedKeys = []
-      , hats = []
-      , time = 0
-      , screen = ( 800, 600 )
-
-      -- 4/3 screen size -> 40 x 30 game units
-      -- check with Camera.getViewSize model.screen model.camera
-      , camera = Camera.fixedArea (40 * 30) ( 0, 0 )
-      , resources = Resources.init
-      , visible = True
-      , paused = False
-      }
-        |> loadLevel 0
-    , Cmd.batch
-        [ Textures.load Resources ResourcesErr
-        ]
-    )
-
-
 loadLevel : Int -> Model -> Model
 loadLevel index model =
     let
         model_ =
             resetLevel model
 
-        length list =
-            List.maximum list |> Maybe.withDefault 0
-
-        level list spawnSpeed =
-            case list of
-                head :: tail ->
-                    { model_
-                        | stage = Level tail spawnSpeed
-                        , rows =
-                            Array.initialize
-                                (length list + 1)
-                                (\index ->
-                                    if index == head then
-                                        [ newWorker head ]
-                                    else
-                                        []
-                                )
-                    }
-
-                _ ->
-                    model
+        level : List Int -> Float -> Float -> Model
+        level list spawnSpeed moveSpeed =
+            { model_
+                | stage = BeforeLevel
+                , level = index
+                , queue = list
+                , spawnSpeed = spawnSpeed
+                , workerSpeed = moveSpeed
+            }
     in
     case index of
         0 ->
-            level [ 0, 3, 1, 3 ] 3
+            level [ 0, 3, 1, 3 ] 3 3
+
+        1 ->
+            level [ 1, 2, 0, 1, 0, 1, 3 ] 3 3.5
 
         _ ->
             { model_ | stage = GameOver }
@@ -184,10 +188,21 @@ resetLevel : Model -> Model
 resetLevel model =
     { model
         | stage = Menu
-        , dude = initDude
         , rows = Array.empty
-        , angryWorkers = []
-        , happyWorkers = []
+        , queue = []
+        , time = 0
+        , nextSpawn = 0
+        , hats = []
+    }
+
+
+newWorker : Int -> Float -> Worker
+newWorker row speed =
+    { x = -1 * constants.outsideViewport
+    , y = rowToY row
+    , lifetime = 0
+    , moveSpeed = speed
+    , hasHat = False
     }
 
 
@@ -196,79 +211,153 @@ resetLevel model =
 
 
 type Msg
-    = Tick Float
-    | Resources Resources.Msg
+    = Resources Resources.Msg
     | ResourcesErr String
+    | LoadLevel Int
+    | StartLevel
     | KeyMsg Keyboard.Extra.Msg
-    | PageVisible Visibility
     | TogglePause
+    | PageVisible Visibility
+    | Tick Float
+    | Restart
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
-    case msg of
-        TogglePause ->
-            togglePause model
-
-        Tick delta ->
-            gameTick (Keyboard.Extra.arrows model.pressedKeys) delta model
-
-        Resources msg ->
+    case ( msg, model.stage ) of
+        ( Resources msg, _ ) ->
             ( { model | resources = Resources.update msg model.resources }
             , Cmd.none
             )
 
-        ResourcesErr url ->
+        ( ResourcesErr url, _ ) ->
             let
                 _ =
                     Debug.log "Could not load texture " url
             in
             ( model, Cmd.none )
 
-        KeyMsg keyMsg ->
-            let
-                keys =
-                    Keyboard.Extra.update keyMsg model.pressedKeys
-            in
-            if List.member Keyboard.Extra.Escape keys then
-                togglePause model
-            else
-                ( { model | pressedKeys = keys }, Cmd.none )
+        ( LoadLevel number, _ ) ->
+            ( loadLevel number model, Cmd.none )
 
-        PageVisible visibility ->
+        ( StartLevel, _ ) ->
+            startLevel model
+
+        ( KeyMsg keyMsg, _ ) ->
+            { model
+                | pressedKeys = Keyboard.Extra.update keyMsg model.pressedKeys
+            }
+                |> handleMenuKeys
+
+        ( TogglePause, _ ) ->
+            togglePause model
+
+        ( PageVisible visibility, _ ) ->
             ( { model | visible = visibility == PageVisibility.Visible }
             , Cmd.none
             )
 
+        ( Tick delta, PlayLevel ) ->
+            gameTick (Keyboard.Extra.arrows model.pressedKeys) delta model
+
+        ( Restart, _ ) ->
+            init
+
+        rest ->
+            --let _ = Debug.log "ignoring" rest in
+            ( model, Cmd.none )
+
+
+startLevel : Model -> ( Model, Cmd Msg )
+startLevel model =
+    case model.stage of
+        BeforeLevel ->
+            ( { model
+                | stage = PlayLevel
+                , dude = initDude
+                , rows = Array.repeat (Helpers.max model.queue + 1) []
+                , nextSpawn = 0
+                , stats = { workers = 0, withoutHats = 0 }
+              }
+            , Cmd.batch [ Sound.play "whistle", Sound.loop "factory" ]
+            )
+
+        _ ->
+            ( model, Cmd.none )
+
+
+handleMenuKeys : Model -> ( Model, Cmd Msg )
+handleMenuKeys model =
+    case model.stage of
+        PauseLevel ->
+            if
+                List.any
+                    (\key ->
+                        key == Keyboard.Extra.Escape || key == Keyboard.Extra.Enter
+                    )
+                    model.pressedKeys
+            then
+                togglePause model
+            else
+                ( model, Cmd.none )
+
+        PlayLevel ->
+            if keyPressed Keyboard.Extra.Escape model then
+                togglePause model
+            else
+                ( model, Cmd.none )
+
+        BeforeLevel ->
+            if keyPressed Keyboard.Extra.Enter model then
+                startLevel model
+            else
+                ( model, Cmd.none )
+
+        _ ->
+            ( model, Cmd.none )
+
+
+keyPressed : Keyboard.Extra.Key -> { b | pressedKeys : List Keyboard.Extra.Key } -> Bool
+keyPressed key { pressedKeys } =
+    --List.any ((==) key) model.pressedKeys
+    List.member key pressedKeys
+
 
 togglePause : Model -> ( Model, Cmd msg )
 togglePause model =
-    ( { model | paused = not model.paused }, Cmd.none )
+    case model.stage of
+        PauseLevel ->
+            ( { model | stage = PlayLevel }, Sound.mute False )
+
+        PlayLevel ->
+            ( { model | stage = PauseLevel }, Sound.mute True )
+
+        _ ->
+            ( model, Cmd.none )
 
 
 gameTick : Keyboard.Extra.Arrows -> Float -> Model -> ( Model, Cmd Msg )
 gameTick arrows delta model =
-    { model | time = model.time + delta }
+    { model | time = model.time + delta, nextSpawn = model.nextSpawn - delta }
         |> updateDude arrows delta
         |> maybeThrow arrows
         |> updateRows delta
         |> updateHats delta
         |> spawnNewWorker
+        |> checkLevelEnd
 
 
 updateDude : Keyboard.Extra.Arrows -> Float -> Model -> ( Model, Cmd Msg )
 updateDude arrows delta model =
     let
         ( dude, cmd ) =
-            model.dude
-                |> moveDude delta
-                |> moveDudeWithKeys arrows
+            moveDude delta arrows model.dude
     in
     ( { model | dude = dude }, cmd )
 
 
-moveDude : Float -> Dude -> Dude
-moveDude delta dude =
+moveDude : Float -> { a | y : Int } -> Dude -> ( Dude, Cmd Msg )
+moveDude delta { y } ({ row } as dude) =
     case dude.animate of
         MoveUp destination ->
             let
@@ -276,9 +365,9 @@ moveDude delta dude =
                     dude.y + (constants.moveSpeed * delta)
             in
             if y >= destination then
-                { dude | y = destination, animate = Idle }
+                ( { dude | y = destination, animate = Idle }, Cmd.none )
             else
-                { dude | y = y }
+                ( { dude | y = y }, Cmd.none )
 
         MoveDown destination ->
             let
@@ -286,58 +375,62 @@ moveDude delta dude =
                     dude.y - (constants.moveSpeed * delta)
             in
             if y <= destination then
-                { dude | y = destination, animate = Idle }
+                ( { dude | y = destination, animate = Idle }, Cmd.none )
             else
-                { dude | y = y }
+                ( { dude | y = y }, Cmd.none )
 
         Throw time ->
             if time > 0 then
-                { dude | animate = Throw (time - delta) }
+                ( { dude | animate = Throw (time - delta) }, Cmd.none )
             else
-                { dude | animate = GetHat }
+                ( { dude | animate = GetHat }, Sound.play "buy" )
 
         GetHat ->
             if dude.x < constants.outsideViewport then
-                { dude
+                ( { dude
                     | x = dude.x + (constants.moveSpeed * delta)
                     , animate = GetHat
-                }
+                  }
+                , Cmd.none
+                )
             else
                 -- emit ka-ching sound?
-                { dude
+                ( { dude
                     | animate = ReturnWithHat
                     , hasHat = True
-                }
+                  }
+                , Cmd.none
+                )
 
         ReturnWithHat ->
-            { dude
+            ( { dude
                 | x = dude.x - (constants.moveSpeed * delta)
                 , animate =
                     if dude.x > constants.dudeX then
                         ReturnWithHat
                     else
                         Idle
-            }
+              }
+            , Cmd.none
+            )
 
         Idle ->
-            dude
-
-
-moveDudeWithKeys : { a | y : Int } -> Dude -> ( Dude, Cmd Msg )
-moveDudeWithKeys { y } ({ animate, row } as dude) =
-    if animate == Idle then
-        if y == 1 && row > 0 then
-            ( { dude | animate = MoveUp <| rowToY (row - 1), row = row - 1 }
-            , Ports.sound "walk"
-            )
-        else if y == -1 && row < 4 then
-            ( { dude | animate = MoveDown <| rowToY (row + 1), row = row + 1 }
-            , Ports.sound "walk"
-            )
-        else
-            ( dude, Cmd.none )
-    else
-        ( dude, Cmd.none )
+            if y == 1 && row > 0 then
+                ( { dude
+                    | animate = MoveUp <| rowToY (row - 1)
+                    , row = row - 1
+                  }
+                , Sound.play "walk"
+                )
+            else if y == -1 && row < 4 then
+                ( { dude
+                    | animate = MoveDown <| rowToY (row + 1)
+                    , row = row + 1
+                  }
+                , Sound.play "walk"
+                )
+            else
+                ( dude, Cmd.none )
 
 
 maybeThrow : Keyboard.Extra.Arrows -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
@@ -347,7 +440,7 @@ maybeThrow { x } ( { dude } as model, cmd ) =
             | dude = { dude | animate = Throw 0.3, hasHat = False }
             , hats = Hat model.dude.row model.dude.x :: model.hats
           }
-        , Cmd.batch [ Ports.sound "throw", cmd ]
+        , Cmd.batch [ Sound.play "throw", cmd ]
         )
     else
         ( model, cmd )
@@ -361,27 +454,15 @@ updateRows delta ( model, cmd ) =
                 |> List.map (updateRow delta)
                 |> List.unzip
                 |> Tuple.mapSecond List.concat
-
-        ( happyWorkers, angryWorkers ) =
-            stoppedWorkers
-                |> List.partition isHappyWorker
     in
     ( { model
         | rows = Array.fromList rows
-        , angryWorkers = List.append stoppedWorkers model.angryWorkers
-        , happyWorkers = List.append happyWorkers model.happyWorkers
+        , stats = updateStats stoppedWorkers model.stats
       }
-    , Cmd.batch
-        [ if happyWorkers == [] then
-            Cmd.none
-          else
-            Ports.sound "happyworker"
-        , if angryWorkers == [] then
-            Cmd.none
-          else
-            Ports.sound "angryworker"
-        , cmd
-        ]
+    , if List.isEmpty stoppedWorkers then
+        cmd
+      else
+        Cmd.batch [ Sound.play "start-working", cmd ]
     )
 
 
@@ -404,9 +485,18 @@ workerKeepsWalking worker =
     worker.x < constants.outsideViewport
 
 
-isHappyWorker : Worker -> Bool
-isHappyWorker worker =
-    worker.hasHat
+updateStats : List Worker -> LevelStats -> LevelStats
+updateStats stoppedWorkers stats =
+    { stats
+        | workers = stats.workers + List.length stoppedWorkers
+        , withoutHats =
+            Helpers.countIf unsafeWorker stats.withoutHats stoppedWorkers
+    }
+
+
+unsafeWorker : Worker -> Bool
+unsafeWorker worker =
+    not worker.hasHat
 
 
 updateHats : Float -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
@@ -432,7 +522,7 @@ moveHat delta hat =
     { hat | x = hat.x - delta * constants.hatSpeed }
 
 
-hatHits : Array (List Worker) -> Int -> Hat -> Maybe ( Int, Int, Int )
+hatHits : Workers -> Int -> Hat -> Maybe ( Int, Int, Int, Bool )
 hatHits rows hatIndex hat =
     case Array.get hat.row rows of
         Nothing ->
@@ -441,7 +531,7 @@ hatHits rows hatIndex hat =
         Just workers ->
             -- updateFirst (\worker -> worker.x <= hat.x) (\worker.hasHat = True) workers
             case
-                Helpers.findFirst
+                Helpers.getFirstWithIndex
                     (\worker ->
                         worker.x >= hat.x && worker.x < (constants.dudeX + 1)
                     )
@@ -450,54 +540,72 @@ hatHits rows hatIndex hat =
                 Nothing ->
                     Nothing
 
-                Just workerIndex ->
-                    Just ( hatIndex, hat.row, workerIndex )
+                Just ( index, worker ) ->
+                    Just ( hatIndex, hat.row, index, worker.hasHat )
 
 
-addHatToWorker : ( Int, Int, Int ) -> ( Model, List (Cmd Msg) ) -> ( Model, List (Cmd Msg) )
-addHatToWorker ( hatIndex, row, workerIndex ) ( model, cmds ) =
+addHatToWorker :
+    ( Int, Int, Int, Bool )
+    -> ( { a | hats : List Hat, rows : Workers, costs : Int }, List (Cmd Msg) )
+    -> ( { a | hats : List Hat, rows : Workers, costs : Int }, List (Cmd Msg) )
+addHatToWorker ( hatIndex, row, workerIndex, hasHat ) ( model, cmds ) =
+    let
+        ( transform, sound ) =
+            if hasHat then
+                ( \worker ->
+                    { worker
+                        | hasHat = False
+                        , moveSpeed = worker.moveSpeed / 3
+                    }
+                , "drop-hat"
+                )
+            else
+                ( \worker ->
+                    { worker
+                        | hasHat = True
+                        , moveSpeed = worker.moveSpeed * 3
+                    }
+                , "get-hat"
+                )
+    in
     ( { model
         | hats = Helpers.dropFromList hatIndex model.hats
-        , rows =
-            Array.Extra.update row
-                (\workers ->
-                    List.indexedMap
-                        (\index worker ->
-                            if index == workerIndex then
-                                if worker.hasHat then
-                                    { worker
-                                        | hasHat = False
-                                        , moveSpeed = worker.moveSpeed / 3
-                                    }
-                                else
-                                    { worker
-                                        | hasHat = True
-                                        , moveSpeed = worker.moveSpeed * 3
-                                    }
-                            else
-                                worker
-                        )
-                        workers
-                )
-                model.rows
-        , costs = model.costs + 10
+        , rows = updateWorkerAtIndex row workerIndex transform model.rows
+        , costs = model.costs + 50
       }
-    , Ports.sound "get-hat" :: cmds
+    , Sound.play sound :: cmds
     )
+
+
+updateWorkerAtIndex : Int -> Int -> (Worker -> Worker) -> Workers -> Workers
+updateWorkerAtIndex row workerIndex transform =
+    Helpers.updateArray row
+        (\list ->
+            List.indexedMap
+                (\index worker ->
+                    if index == workerIndex then
+                        transform worker
+                    else
+                        worker
+                )
+                list
+        )
 
 
 spawnNewWorker : ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
 spawnNewWorker ( model, cmd ) =
-    case model.stage of
-        Level (row :: list) spawnSpeed ->
-            if model.time >= spawnSpeed then
+    case ( model.stage, model.queue ) of
+        ( PlayLevel, row :: queue ) ->
+            if model.nextSpawn <= 0 then
                 ( { model
-                    | time = 0 -- time = model.time - spawnSpeed
-                    , stage = Level list spawnSpeed
+                    | nextSpawn = model.spawnSpeed
+                    , queue = queue
                     , rows =
-                        Array.Extra.update row (spawnWorker row) model.rows
+                        Array.Extra.update row
+                            (spawnWorker row model.workerSpeed)
+                            model.rows
                   }
-                , Cmd.batch [ cmd, Ports.sound "spawn" ]
+                , Cmd.batch [ cmd, Sound.play "spawn" ]
                 )
             else
                 ( model, cmd )
@@ -506,9 +614,29 @@ spawnNewWorker ( model, cmd ) =
             ( model, cmd )
 
 
-spawnWorker : Int -> List Worker -> List Worker
-spawnWorker row workers =
-    List.append workers [ newWorker row ]
+spawnWorker : Int -> Float -> List Worker -> List Worker
+spawnWorker row speed workers =
+    List.append workers [ newWorker row speed ]
+
+
+checkLevelEnd : ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
+checkLevelEnd ( model, cmd ) =
+    case ( model.stage, model.queue ) of
+        ( PlayLevel, [] ) ->
+            if model.dude.animate == Idle && noMoreWorkers model.rows then
+                ( loadLevel (model.level + 1) model
+                , Cmd.batch [ cmd, Sound.play "whistle", Sound.stop "factory" ]
+                )
+            else
+                ( model, cmd )
+
+        _ ->
+            ( model, cmd )
+
+
+noMoreWorkers : Workers -> Bool
+noMoreWorkers rows =
+    (List.length <| List.concat <| Array.toList rows) == 0
 
 
 
@@ -518,21 +646,103 @@ spawnWorker row workers =
 view : Model -> Html Msg
 view model =
     div []
-        [ Game.render
-            (renderConfig model)
-            (toRenderables model)
-        , if model.paused then
-            div [ class "overlay" ]
-                [ div [ class "modal" ]
-                    [ h1 [] [ text "Game is paused" ]
-                    , button
-                        [ onClick TogglePause ]
-                        [ text "continue" ]
-                    ]
-                ]
-          else
-            text ""
+        [ Game.render (renderConfig model) (toRenderables model)
+        , overlay model
         ]
+
+
+overlay : Model -> Html Msg
+overlay model =
+    case model.stage of
+        BeforeLevel ->
+            overlayWrapper <| beforeLevel model
+
+        PauseLevel ->
+            overlayWrapper
+                [ h1 [] [ text "Game is paused" ]
+                , note "Press [Escape] or [Enter] to continue"
+                , button [ onClick TogglePause ] [ text "continue" ]
+                ]
+
+        GameOver ->
+            overlayWrapper <|
+                [ h1 [] [ text "You were fired!" ]
+                , line <| "After " ++ toString model.level ++ " days without an accident, a worker was injured today."
+                , line <| "And someone in management calculated that it is cheaper to pay for the work accidents instead of paying your salary and the expenses of " ++ toString model.costs ++ "€ for safety equipment."
+                , line "Business is not fair..."
+                , button [ onClick Restart ] [ text "Try again." ]
+                ]
+
+        _ ->
+            text ""
+
+
+line : String -> Html msg
+line string =
+    p [] [ text string ]
+
+
+note : String -> Html msg
+note text_ =
+    p [] [ Html.em [] [ text text_ ] ]
+
+
+overlayWrapper : List (Html msg) -> Html msg
+overlayWrapper children =
+    div [ class "overlay" ]
+        [ div [ class "modal" ] children ]
+
+
+beforeLevel : Model -> List (Html Msg)
+beforeLevel ({ stats, level } as model) =
+    case level of
+        0 ->
+            beforeFirstLevel
+
+        1 ->
+            afterFirstLevel model
+
+        _ ->
+            [ h2 [] [ text "Your shift has ended" ]
+            , h2 []
+                [ Html.em [] [ text <| toString level ]
+                , text " days without accident"
+                ]
+            , p []
+                [ text <|
+                    if stats.withoutHats > 0 then
+                        "Even though " ++ toString stats.withoutHats ++ " workers were not properly equipped."
+                    else
+                        "But this was to be expected because you managed to provide all " ++ toString stats.workers ++ " workers with the proper safety equipment."
+                ]
+            , button [ onClick <| StartLevel ] [ text "Sleep" ]
+            ]
+
+
+beforeFirstLevel : List (Html Msg)
+beforeFirstLevel =
+    [ h1 [] [ text "Welcome to Sector 7G" ]
+    , line "You were hired as a safety inspector and are tasked with reducing the number of work accidents."
+    , line "The longest time without an accident in this sector was three days."
+    , line "Use the arrow keys to move and the left arrow key to throw a safety hat to a worker."
+    , line "But beware, each hat costs money and you will not only be evaluated according to the number of accidents, but also on the costs for safety equipment."
+    , note "Note: You can pause the game by pressing the Escape key."
+    , button [ onClick StartLevel ] [ text "Start work" ]
+    ]
+
+
+afterFirstLevel : Model -> List (Html Msg)
+afterFirstLevel { stats } =
+    [ h1 [] [ text "You are off to a good start!" ]
+    , line "Your first day at work and only because of your effort there were no accidents."
+    , line <|
+        if stats.withoutHats > 0 then
+            "But if you are completely honest, there was a little bit of luck involved, as " ++ toString stats.withoutHats ++ " workers went to their jobs without proper safety equipment."
+        else
+            "But this was expected because you did an awesome job and distributed proper safety equipment to all " ++ toString stats.workers ++ " workers."
+    , line "Keep up the good work tomorrow, too."
+    , button [ onClick StartLevel ] [ text "Sleep" ]
+    ]
 
 
 renderConfig : { d | camera : Camera, screen : ( Int, Int ), time : Float } -> Game.RenderConfig
@@ -549,7 +759,6 @@ toRenderables ({ resources, dude, rows } as model) =
         [ [ background resources ]
         , List.concatMap (row resources) (Array.toList rows)
         , [ renderDude resources dude ]
-        , List.map (worker resources) model.angryWorkers
         , List.map (hat resources) model.hats
         ]
 
@@ -640,13 +849,15 @@ subscriptions : Model -> Sub Msg
 subscriptions model =
     Sub.batch <|
         List.append
-            (if model.visible && not model.paused then
-                [ AnimationFrame.diffs (Tick << (\d -> d / 1000))
+            (case ( model.visible, model.stage ) of
+                ( True, PlayLevel ) ->
+                    [ AnimationFrame.diffs (Tick << (\d -> d / 1000))
 
-                --, Window.resizes ScreenSize
-                ]
-             else
-                []
+                    --, Window.resizes ScreenSize
+                    ]
+
+                _ ->
+                    []
             )
             [ Sub.map KeyMsg Keyboard.Extra.subscriptions
             , PageVisibility.visibilityChanges PageVisible

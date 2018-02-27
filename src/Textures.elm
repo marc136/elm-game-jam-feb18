@@ -6,16 +6,14 @@ import WebGL.Texture as Texture exposing (Texture, defaultOptions)
 
 availableTextures : List String
 availableTextures =
-    [ textures.dude
-    , textures.worker
+    [ textures.worker
     , textures.background
     , textures.hat
     ]
 
 
 textures =
-    { dude = "images/dude.png"
-    , background = "images/background.png"
+    { background = "images/background.png"
     , worker = "images/worker.png"
     , hat = "images/hat.png"
     }

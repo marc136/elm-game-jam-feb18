@@ -1,7 +1,24 @@
 module Helpers exposing (..)
 
-{-| Common helper functions when working with lists
+{-| Common helper functions
 -}
+
+import Array exposing (Array)
+
+
+max : List comparable -> comparable
+max list =
+    List.maximum list |> Maybe.withDefault 0
+
+
+updateArray : Int -> (a -> a) -> Array a -> Array a
+updateArray index transform array =
+    case Array.get index array of
+        Nothing ->
+            array
+
+        Just element ->
+            Array.set index (transform element) array
 
 
 {-| remove element at given index from list
@@ -17,6 +34,24 @@ dropFromList index list =
                     Just hat
             )
         |> List.filterMap identity
+
+
+getFirstWithIndex : (a -> Bool) -> List a -> Maybe ( Int, a )
+getFirstWithIndex check list =
+    getFirstHelper check 0 list
+
+
+getFirstHelper : (a -> Bool) -> Int -> List a -> Maybe ( Int, a )
+getFirstHelper check index list =
+    case list of
+        [] ->
+            Nothing
+
+        head :: tail ->
+            if check head then
+                Just ( index, head )
+            else
+                getFirstHelper check (index + 1) tail
 
 
 {-| Get index of first element that satisfies the check
@@ -58,3 +93,14 @@ updateFirst check transform list =
                         helper (head :: before) tail
     in
     helper [] list
+
+
+countIf : (a -> Bool) -> Int -> List a -> Int
+countIf check =
+    List.foldl
+        (\a count ->
+            if check a then
+                count + 1
+            else
+                count
+        )

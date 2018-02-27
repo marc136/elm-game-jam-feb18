@@ -1,3 +1,6 @@
 port module Ports exposing (..)
 
-port sound : String -> Cmd msg
+import Json.Encode
+
+
+port sounds : Json.Encode.Value -> Cmd msg

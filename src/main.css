@@ -44,19 +44,29 @@ canvas {
 }
 
 .modal {
-  width: auto;
+  width: 100%;
+  padding: 2em 2em;
 
   display: flex;
   flex-direction: column;
-  
+
   color: rgb(70, 47, 151);
   background: #eee;
-  border-radius: .5em;
-  padding: 2em 2em;
+}
+
+@media (min-width: 40em) {
+  .modal {
+    max-width: 40em;
+    border-radius: .5em;
+  }
 }
 
 .modal > h1 {
-  margin: 0 auto 2em;
+  margin: 0 auto 1em;
+}
+
+.modal > p {
+  margin-top: 0;
 }
 
 button {
@@ -67,10 +77,15 @@ button {
   border-radius: .5em;
   background: #ccc;
   border: .1em solid rgb(70, 47, 151);
+  color: rgb(70, 47, 151);
   transition: all .5s;
 }
 
 button:hover {
   background-color: rgb(95, 60, 223);
   color: white;
+}
+
+button {
+  outline: 0;
 }
