@@ -10,7 +10,6 @@
     "dependencies": {
         "Zinggi/elm-2d-game": "3.1.0 <= v < 4.0.0",
         "Zinggi/elm-game-resources": "2.0.0 <= v < 3.0.0",
-        "elm-community/array-extra": "1.0.2 <= v < 2.0.0",
         "elm-community/linear-algebra": "3.1.1 <= v < 4.0.0",
         "elm-community/webgl": "2.0.5 <= v < 3.0.0",
         "elm-lang/animation-frame": "1.0.1 <= v < 2.0.0",
@@ -21,5 +20,6 @@
         "elm-lang/window": "1.0.1 <= v < 2.0.0",
         "ohanhi/keyboard-extra": "3.0.4 <= v < 4.0.0"
     },
-    "elm-version": "0.18.0 <= v < 0.19.0"
+    "elm-version": "0.18.0 <= v < 0.19.0",
+    "homepage": "https://marc136.github.io/elm-game-jam-feb18/"
 }
