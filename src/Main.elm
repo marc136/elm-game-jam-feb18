@@ -1,20 +1,18 @@
 module Main exposing (..)
 
 import AnimationFrame
-import Array exposing (Array)
-import Array.Extra
+import Array
+import Common
 import Game.Resources as Resources exposing (Resources)
-import Game.TwoD as Game
 import Game.TwoD.Camera as Camera exposing (Camera)
-import Game.TwoD.Render as Render exposing (Renderable)
 import Helpers
 import Html exposing (Html, button, div, h1, h2, p, text)
-import Html.Attributes exposing (class)
-import Html.Events exposing (onClick)
 import Keyboard.Extra
 import PageVisibility exposing (Visibility)
 import Sound
 import Textures exposing (textures)
+import Types exposing (..)
+import View.Html
 
 
 constants =
@@ -27,87 +25,17 @@ constants =
 
 
 
----- MODEL ----
+---- PROGRAM ----
 
 
-type alias Model =
-    { stage : Stage
-
-    -- level specific
-    , level : Int
-    , dude : Dude
-    , queue : List Int
-
-    {--TODO decide if walking workers should be in one list instead-}
-    , rows : Workers
-    , hats : List Hat
-    , spawnSpeed : Float
-    , workerSpeed : Float
-
-    -- game stats
-    , stats : LevelStats
-    , costs : Int
-
-    -- general stuff
-    , pressedKeys : List Keyboard.Extra.Key
-    , time : Float
-    , nextSpawn : Float
-    , resources : Resources
-    , screen : ( Int, Int )
-    , camera : Camera
-    , visible : Bool
-    }
-
-
-type Stage
-    = Menu
-    | BeforeLevel
-    | PlayLevel
-    | PauseLevel
-    | GameOver
-
-
-type alias Dude =
-    { x : Float
-    , y : Float
-    , animate : Animate
-    , row : Int
-    , hasHat : Bool
-    }
-
-
-type Animate
-    = Idle
-    | MoveUp Float
-    | MoveDown Float
-    | Throw Float
-    | GetHat
-    | ReturnWithHat
-
-
-type alias Workers =
-    Array (List Worker)
-
-
-type alias Worker =
-    { x : Float
-    , y : Float
-    , lifetime : Float
-    , moveSpeed : Float
-    , hasHat : Bool
-    }
-
-
-type alias Hat =
-    { row : Int
-    , x : Float
-    }
-
-
-type alias LevelStats =
-    { workers : Int
-    , withoutHats : Int
-    }
+main : Program Never Model Msg
+main =
+    Html.program
+        { view = View.Html.view
+        , init = init
+        , update = update
+        , subscriptions = subscriptions
+        }
 
 
 
@@ -145,16 +73,11 @@ init =
 initDude : Dude
 initDude =
     { x = constants.dudeX
-    , y = rowToY 0
+    , y = Common.rowToY 0
     , animate = Idle
     , row = 0
     , hasHat = True
     }
-
-
-rowToY : Int -> Float
-rowToY row =
-    13 - (toFloat row * 5)
 
 
 loadLevel : Int -> Model -> Model
@@ -199,7 +122,7 @@ resetLevel model =
 newWorker : Int -> Float -> Worker
 newWorker row speed =
     { x = -1 * constants.outsideViewport
-    , y = rowToY row
+    , y = Common.rowToY row
     , lifetime = 0
     , moveSpeed = speed
     , hasHat = False
@@ -208,18 +131,6 @@ newWorker row speed =
 
 
 ---- UPDATE ----
-
-
-type Msg
-    = Resources Resources.Msg
-    | ResourcesErr String
-    | LoadLevel Int
-    | StartLevel
-    | KeyMsg Keyboard.Extra.Msg
-    | TogglePause
-    | PageVisible Visibility
-    | Tick Float
-    | Restart
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -417,14 +328,14 @@ moveDude delta { y } ({ row } as dude) =
         Idle ->
             if y == 1 && row > 0 then
                 ( { dude
-                    | animate = MoveUp <| rowToY (row - 1)
+                    | animate = MoveUp <| Common.rowToY (row - 1)
                     , row = row - 1
                   }
                 , Sound.play "walk"
                 )
             else if y == -1 && row < 4 then
                 ( { dude
-                    | animate = MoveDown <| rowToY (row + 1)
+                    | animate = MoveDown <| Common.rowToY (row + 1)
                     , row = row + 1
                   }
                 , Sound.play "walk"
@@ -468,7 +379,8 @@ updateRows delta ( model, cmd ) =
 
 updateRow : Float -> List Worker -> ( List Worker, List Worker )
 updateRow delta workers =
-    List.map (moveWorker delta) workers
+    workers
+        |> List.map (moveWorker delta)
         |> List.partition workerKeepsWalking
 
 
@@ -601,7 +513,7 @@ spawnNewWorker ( model, cmd ) =
                     | nextSpawn = model.spawnSpeed
                     , queue = queue
                     , rows =
-                        Array.Extra.update row
+                        Helpers.updateArray row
                             (spawnWorker row model.workerSpeed)
                             model.rows
                   }
@@ -640,208 +552,6 @@ noMoreWorkers rows =
 
 
 
----- VIEW ----
-
-
-view : Model -> Html Msg
-view model =
-    div []
-        [ Game.render (renderConfig model) (toRenderables model)
-        , overlay model
-        ]
-
-
-overlay : Model -> Html Msg
-overlay model =
-    case model.stage of
-        BeforeLevel ->
-            overlayWrapper <| beforeLevel model
-
-        PauseLevel ->
-            overlayWrapper
-                [ h1 [] [ text "Game is paused" ]
-                , note "Press [Escape] or [Enter] to continue"
-                , button [ onClick TogglePause ] [ text "continue" ]
-                ]
-
-        GameOver ->
-            overlayWrapper <|
-                [ h1 [] [ text "You were fired!" ]
-                , line <| "After " ++ toString model.level ++ " days without an accident, a worker was injured today."
-                , line <| "And someone in management calculated that it is cheaper to pay for the work accidents instead of paying your salary and the expenses of " ++ toString model.costs ++ "€ for safety equipment."
-                , line "Business is not fair..."
-                , button [ onClick Restart ] [ text "Try again." ]
-                ]
-
-        _ ->
-            text ""
-
-
-line : String -> Html msg
-line string =
-    p [] [ text string ]
-
-
-note : String -> Html msg
-note text_ =
-    p [] [ Html.em [] [ text text_ ] ]
-
-
-overlayWrapper : List (Html msg) -> Html msg
-overlayWrapper children =
-    div [ class "overlay" ]
-        [ div [ class "modal" ] children ]
-
-
-beforeLevel : Model -> List (Html Msg)
-beforeLevel ({ stats, level } as model) =
-    case level of
-        0 ->
-            beforeFirstLevel
-
-        1 ->
-            afterFirstLevel model
-
-        _ ->
-            [ h2 [] [ text "Your shift has ended" ]
-            , h2 []
-                [ Html.em [] [ text <| toString level ]
-                , text " days without accident"
-                ]
-            , p []
-                [ text <|
-                    if stats.withoutHats > 0 then
-                        "Even though " ++ toString stats.withoutHats ++ " workers were not properly equipped."
-                    else
-                        "But this was to be expected because you managed to provide all " ++ toString stats.workers ++ " workers with the proper safety equipment."
-                ]
-            , button [ onClick <| StartLevel ] [ text "Sleep" ]
-            ]
-
-
-beforeFirstLevel : List (Html Msg)
-beforeFirstLevel =
-    [ h1 [] [ text "Welcome to Sector 7G" ]
-    , line "You were hired as a safety inspector and are tasked with reducing the number of work accidents."
-    , line "The longest time without an accident in this sector was three days."
-    , line "Use the arrow keys to move and the left arrow key to throw a safety hat to a worker."
-    , line "But beware, each hat costs money and you will not only be evaluated according to the number of accidents, but also on the costs for safety equipment."
-    , note "Note: You can pause the game by pressing the Escape key."
-    , button [ onClick StartLevel ] [ text "Start work" ]
-    ]
-
-
-afterFirstLevel : Model -> List (Html Msg)
-afterFirstLevel { stats } =
-    [ h1 [] [ text "You are off to a good start!" ]
-    , line "Your first day at work and only because of your effort there were no accidents."
-    , line <|
-        if stats.withoutHats > 0 then
-            "But if you are completely honest, there was a little bit of luck involved, as " ++ toString stats.withoutHats ++ " workers went to their jobs without proper safety equipment."
-        else
-            "But this was expected because you did an awesome job and distributed proper safety equipment to all " ++ toString stats.workers ++ " workers."
-    , line "Keep up the good work tomorrow, too."
-    , button [ onClick StartLevel ] [ text "Sleep" ]
-    ]
-
-
-renderConfig : { d | camera : Camera, screen : ( Int, Int ), time : Float } -> Game.RenderConfig
-renderConfig { camera, time, screen } =
-    { camera = camera
-    , time = time
-    , size = screen
-    }
-
-
-toRenderables : Model -> List Renderable
-toRenderables ({ resources, dude, rows } as model) =
-    List.concat
-        [ [ background resources ]
-        , List.concatMap (row resources) (Array.toList rows)
-        , [ renderDude resources dude ]
-        , List.map (hat resources) model.hats
-        ]
-
-
-background : Resources -> Renderable
-background resources =
-    Render.spriteZ
-        { position = ( -20, -15, 0 )
-        , size = ( 40, 30 )
-        , texture = Resources.getTexture textures.background resources
-        }
-
-
-renderDude : Resources -> Dude -> Renderable
-renderDude resources dude =
-    workerSprite resources dude (direction dude)
-
-
-direction : Dude -> Float
-direction { animate } =
-    if animate == GetHat then
-        1
-    else
-        -1
-
-
-row : Resources -> List Worker -> List Renderable
-row resources workers =
-    List.map (worker resources) workers
-
-
-worker : Resources -> Worker -> Renderable
-worker resources worker =
-    workerSprite resources worker 1
-
-
-workerSprite : Resources -> { a | x : Float, y : Float, hasHat : Bool } -> Float -> Renderable
-workerSprite resources { x, y, hasHat } direction =
-    let
-        row =
-            if hasHat then
-                0
-            else
-                1
-
-        height =
-            0.1494140625
-    in
-    Render.animatedSpriteWithOptions
-        { position = ( x, y, 0 )
-        , size = ( direction * 6, 8 )
-        , texture = Resources.getTexture textures.worker resources
-        , bottomLeft = ( 0, row * height )
-        , topRight = ( 1, (row + 1) * height )
-        , duration = 1.2
-        , numberOfFrames = 4
-        , rotation = 0
-        , pivot = ( 0.5, 1 )
-        }
-
-
-hat : Resources -> Hat -> Renderable
-hat resources { x, row } =
-    Render.animatedSpriteWithOptions
-        { position = ( x, rowToY row, 0 )
-
-        -- if a size value is < 0 the image is flipped
-        , size = ( 3, 4 )
-        , texture = Resources.getTexture textures.hat resources
-
-        -- bottomLeft and topRight allow to select a subsection of an image ( x, y )
-        , bottomLeft = ( 0, 0 )
-        , topRight = ( 1, 1 )
-        , duration = 1.2
-        , numberOfFrames = 4
-        , rotation = 0
-
-        -- pivot point for rotation
-        , pivot = ( 0.5, 1 )
-        }
-
-
-
 ---- SUBSCRIPTIONS ----
 
 
@@ -851,10 +561,7 @@ subscriptions model =
         List.append
             (case ( model.visible, model.stage ) of
                 ( True, PlayLevel ) ->
-                    [ AnimationFrame.diffs (Tick << (\d -> d / 1000))
-
-                    --, Window.resizes ScreenSize
-                    ]
+                    [ AnimationFrame.diffs (Tick << (\d -> d / 1000)) ]
 
                 _ ->
                     []
@@ -862,17 +569,3 @@ subscriptions model =
             [ Sub.map KeyMsg Keyboard.Extra.subscriptions
             , PageVisibility.visibilityChanges PageVisible
             ]
-
-
-
----- PROGRAM ----
-
-
-main : Program Never Model Msg
-main =
-    Html.program
-        { view = view
-        , init = init
-        , update = update
-        , subscriptions = subscriptions
-        }
